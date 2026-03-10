@@ -1,37 +1,10 @@
-from fastapi import Header, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
-@router.post("/lrs_pan")
-@limiter.limit("90/minute")
-async def verify_single_pan(
-    request: Request,
-    req: LRSRequest,
-    gaman_key: str = Header(None)
-):
 
-    # Validate header presence
-    if not gaman_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing gaman-key"
-        )
-
-    # Fetch stored key from secret manager
-    try:
-        stored_key = get_secret_from_gcp("GAMAN_API_KEY", project_id)
-    except Exception:
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized"
-        )
-
-    # Compare keys
-    if gaman_key != stored_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized"
-        )
-
-    # Continue normal flow
-    result = await fetch_lrs_data_async(req.pan)
-
-    return result
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=400,
+        content={"error": "invalid input"}
+    )
