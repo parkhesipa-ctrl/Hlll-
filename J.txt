@@ -1,24 +1,75 @@
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
+import pandas as pd
+import os
 
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self'; "
-            "img-src 'self'; "
-            "font-src 'self'; "
-            "connect-src 'self'; "
-            "media-src 'self'; "
-            "frame-src 'none'; "
-            "frame-ancestors 'none'; "
-            "object-src 'none'; "
-            "base-uri 'self'; "
-            "form-action 'self';"
-        )
+def process_excel(input_file, output_file=None):
 
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
+    file_ext = os.path.splitext(input_file)[1].lower()
 
-        return response
+    # Read CD_test sheet
+    df = pd.read_excel(input_file, sheet_name="CD_test", engine="openpyxl")
+    df.columns = df.columns.str.strip()
+
+    # -----------------------------
+    # PART 1: ADD IGST / SGST / CGST AT END
+    # -----------------------------
+
+    igst_cols_end = [col for col in df.columns if col.lower().endswith("as igst")]
+    sgst_cols_end = [col for col in df.columns if col.lower().endswith("as sgst")]
+    cgst_cols_end = [col for col in df.columns if col.lower().endswith("as cgst")]
+
+    for col in igst_cols_end + sgst_cols_end + cgst_cols_end:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    df["IGST"] = (df[igst_cols_end].sum(axis=1) / 2).round(2)
+    df["SGST"] = (df[sgst_cols_end].sum(axis=1) / 2).round(2)
+    df["CGST"] = (df[cgst_cols_end].sum(axis=1) / 2).round(2)
+
+    # -----------------------------
+    # PART 2: CREATE ISD DISTRIBUTION SHEET
+    # -----------------------------
+
+    # Identify columns starting with
+    cgst_cols_start = [col for col in df.columns if col.lower().startswith("cgst as")]
+    sgst_cols_start = [col for col in df.columns if col.lower().startswith("sgst as")]
+    igst_cols_start = [col for col in df.columns if col.lower().startswith("igst as")]
+
+    # Calculate totals row-wise
+    df["CGST_TOTAL"] = (df[cgst_cols_start].sum(axis=1) / 2).round(2)
+    df["SGST_TOTAL"] = (df[sgst_cols_start].sum(axis=1) / 2).round(2)
+    df["IGST_TOTAL"] = (df[igst_cols_start].sum(axis=1) / 2).round(2)
+
+    # Group by isdgstin
+    grouped = df.groupby("isdgstin")[["CGST_TOTAL", "SGST_TOTAL", "IGST_TOTAL"]].sum().reset_index()
+
+    # Build ISD distribution records
+    records = []
+
+    for _, row in grouped.iterrows():
+        gstin = row["isdgstin"]
+
+        if row["CGST_TOTAL"] != 0:
+            records.append([gstin, "CGST", row["CGST_TOTAL"]])
+
+        if row["SGST_TOTAL"] != 0:
+            records.append([gstin, "SGST", row["SGST_TOTAL"]])
+
+        if row["IGST_TOTAL"] != 0:
+            records.append([gstin, "IGST", row["IGST_TOTAL"]])
+
+    isd_df = pd.DataFrame(records, columns=["gstin", "narrative", "amount"])
+
+    # Remove helper columns from main sheet
+    df.drop(columns=["CGST_TOTAL", "SGST_TOTAL", "IGST_TOTAL"], inplace=True)
+
+    # -----------------------------
+    # SAVE FILE (Keep Both Sheets)
+    # -----------------------------
+
+    if output_file is None:
+        output_file = input_file
+
+    with pd.ExcelWriter(output_file, engine="openpyxl", mode="w") as writer:
+        df.to_excel(writer, sheet_name="CD_test", index=False)
+        isd_df.to_excel(writer, sheet_name="isd distribution", index=False)
+
+    print("Processing completed successfully!")
