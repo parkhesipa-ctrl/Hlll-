@@ -1,0 +1,97 @@
+import pandas as pd
+from openpyxl import load_workbook
+import os
+
+
+def process_pipeline(input_file, template_file, output_excel, output_template):
+
+    # -----------------------------
+    # READ CD_test
+    # -----------------------------
+    df = pd.read_excel(input_file, sheet_name="CD_test", engine="openpyxl")
+    df.columns = df.columns.str.strip()
+
+    # -----------------------------
+    # PART 1: CREATE IGST SGST CGST
+    # -----------------------------
+    igst_cols = [c for c in df.columns if c.lower().endswith("as igst")]
+    sgst_cols = [c for c in df.columns if c.lower().endswith("as sgst")]
+    cgst_cols = [c for c in df.columns if c.lower().endswith("as cgst")]
+
+    for col in igst_cols + sgst_cols + cgst_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    df["IGST"] = (df[igst_cols].sum(axis=1) / 2).round(2)
+    df["SGST"] = (df[sgst_cols].sum(axis=1) / 2).round(2)
+    df["CGST"] = (df[cgst_cols].sum(axis=1) / 2).round(2)
+
+    # -----------------------------
+    # PART 2: ISD DISTRIBUTION
+    # -----------------------------
+    cgst_start = [c for c in df.columns if c.lower().startswith("cgst as")]
+    sgst_start = [c for c in df.columns if c.lower().startswith("sgst as")]
+    igst_start = [c for c in df.columns if c.lower().startswith("igst as")]
+
+    df["CGST_TOTAL"] = df[cgst_start].sum(axis=1) / 2
+    df["SGST_TOTAL"] = df[sgst_start].sum(axis=1) / 2
+    df["IGST_TOTAL"] = df[igst_start].sum(axis=1) / 2
+
+    grouped = df.groupby("isdgstin")[["CGST_TOTAL","SGST_TOTAL","IGST_TOTAL"]].sum().reset_index()
+
+    records = []
+
+    for _, row in grouped.iterrows():
+
+        gstin = row["isdgstin"]
+
+        if row["CGST_TOTAL"] != 0:
+            records.append([gstin,"CGST",round(row["CGST_TOTAL"],2)])
+
+        if row["SGST_TOTAL"] != 0:
+            records.append([gstin,"SGST",round(row["SGST_TOTAL"],2)])
+
+        if row["IGST_TOTAL"] != 0:
+            records.append([gstin,"IGST",round(row["IGST_TOTAL"],2)])
+
+    isd_df = pd.DataFrame(records, columns=["gstin","narrative","amount"])
+
+    df.drop(columns=["CGST_TOTAL","SGST_TOTAL","IGST_TOTAL"], inplace=True)
+
+    # -----------------------------
+    # SAVE EXCEL WITH BOTH SHEETS
+    # -----------------------------
+    with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="CD_test", index=False)
+        isd_df.to_excel(writer, sheet_name="isd distribution", index=False)
+
+    # -----------------------------
+    # PART 3: POPULATE TEMPLATE
+    # -----------------------------
+    template_records = []
+
+    for _, row in df.iterrows():
+
+        gstin = row["Recipientgstin"]
+
+        template_records.append([gstin,"CGST",row["CGST"],"DR"])
+        template_records.append([gstin,"SGST",row["SGST"],"DR"])
+        template_records.append([gstin,"IGST",row["IGST"],"DR"])
+
+    template_df = pd.DataFrame(template_records,
+                               columns=["gstin","narrative","amount","cr dr"])
+
+    wb = load_workbook(template_file)
+    ws = wb.active
+
+    start_row = 3
+
+    for i, row in template_df.iterrows():
+
+        ws.cell(row=start_row+i, column=1).value = row["cr dr"]
+        ws.cell(row=start_row+i, column=2).value = row["amount"]
+        ws.cell(row=start_row+i, column=3).value = row["gstin"]
+        ws.cell(row=start_row+i, column=4).value = row["narrative"]
+
+    wb.save(output_template)
+
+    print("Pipeline completed successfully!")
