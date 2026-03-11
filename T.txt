@@ -4,15 +4,15 @@ from openpyxl import load_workbook
 
 def process_pipeline(input_file, template_file, output_excel, output_template):
 
-    # -----------------------------
+    # --------------------------------------------------
     # READ CD_test
-    # -----------------------------
+    # --------------------------------------------------
     df = pd.read_excel(input_file, sheet_name="CD_test", engine="openpyxl")
     df.columns = df.columns.str.strip()
 
-    # -----------------------------
-    # CREATE IGST SGST CGST
-    # -----------------------------
+    # --------------------------------------------------
+    # CALCULATE IGST SGST CGST
+    # --------------------------------------------------
     igst_cols = [c for c in df.columns if c.lower().endswith("as igst")]
     sgst_cols = [c for c in df.columns if c.lower().endswith("as sgst")]
     cgst_cols = [c for c in df.columns if c.lower().endswith("as cgst")]
@@ -24,9 +24,9 @@ def process_pipeline(input_file, template_file, output_excel, output_template):
     df["SGST"] = (df[sgst_cols].sum(axis=1) / 2).round(2)
     df["CGST"] = (df[cgst_cols].sum(axis=1) / 2).round(2)
 
-    # -----------------------------
+    # --------------------------------------------------
     # CREATE ISD DISTRIBUTION
-    # -----------------------------
+    # --------------------------------------------------
     cgst_start = [c for c in df.columns if c.lower().startswith("cgst as")]
     sgst_start = [c for c in df.columns if c.lower().startswith("sgst as")]
     igst_start = [c for c in df.columns if c.lower().startswith("igst as")]
@@ -41,7 +41,7 @@ def process_pipeline(input_file, template_file, output_excel, output_template):
 
     for _, row in grouped.iterrows():
 
-        gstin = row["isdgstin"]
+        gstin = str(row["isdgstin"]).strip()
 
         if row["CGST_TOTAL"] != 0:
             records.append([gstin,"CGST",round(row["CGST_TOTAL"],2)])
@@ -56,39 +56,47 @@ def process_pipeline(input_file, template_file, output_excel, output_template):
 
     df.drop(columns=["CGST_TOTAL","SGST_TOTAL","IGST_TOTAL"], inplace=True)
 
-    # -----------------------------
+    # --------------------------------------------------
     # SAVE PROCESSED FILE
-    # -----------------------------
+    # --------------------------------------------------
     with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="CD_test", index=False)
         isd_df.to_excel(writer, sheet_name="isd distribution", index=False)
 
-    # -----------------------------
-    # GSTIN MAP
-    # -----------------------------
-    gst_map = {}
+    # --------------------------------------------------
+    # BUILD MAPS
+    # --------------------------------------------------
+    cd_map = {}
 
     for _, row in df.iterrows():
 
         gstin = str(row["Recipientgstin"]).strip()
 
-        gst_map[gstin] = {
+        cd_map[gstin] = {
             "CGST": row["CGST"],
             "SGST": row["SGST"],
             "IGST": row["IGST"]
         }
 
-    # -----------------------------
+    isd_map = {}
+
+    for _, row in isd_df.iterrows():
+
+        gstin = str(row["gstin"]).strip()
+        narrative = str(row["narrative"]).strip()
+
+        if gstin not in isd_map:
+            isd_map[gstin] = {}
+
+        isd_map[gstin][narrative] = row["amount"]
+
+    # --------------------------------------------------
     # LOAD TEMPLATE
-    # -----------------------------
+    # --------------------------------------------------
     wb = load_workbook(template_file)
     ws = wb.active
 
-    # -----------------------------
-    # DETECT TEMPLATE COLUMNS
-    # -----------------------------
     header_row = 2
-
     col_map = {}
 
     for col in range(1, ws.max_column + 1):
@@ -96,48 +104,63 @@ def process_pipeline(input_file, template_file, output_excel, output_template):
         header = ws.cell(row=header_row, column=col).value
 
         if header:
-            header = header.strip()
 
-            if header.lower() == "dr/cr":
+            header = header.strip().lower()
+
+            if header == "dr/cr":
                 col_map["drcr"] = col
 
-            elif header.lower() == "transaction amount":
+            elif header == "transaction amount":
                 col_map["amount"] = col
 
-            elif header.lower() == "narrative 5":
+            elif header == "narrative 5":
                 col_map["narrative"] = col
 
-            elif header.lower() == "gstin":
+            elif header == "gstin":
                 col_map["gstin"] = col
 
-    # -----------------------------
+    # --------------------------------------------------
     # UPDATE TEMPLATE
-    # -----------------------------
+    # --------------------------------------------------
     for r in range(header_row + 1, ws.max_row + 1):
 
         gstin = ws.cell(row=r, column=col_map["gstin"]).value
         narrative = ws.cell(row=r, column=col_map["narrative"]).value
 
-        if gstin and narrative:
+        if not gstin or not narrative:
+            continue
 
-            gstin = str(gstin).strip()
-            narrative = str(narrative).strip()
+        gstin = str(gstin).strip()
+        narrative = str(narrative).strip()
 
-            if gstin in gst_map and narrative in gst_map[gstin]:
+        amount = None
+        drcr_value = None
 
-                amount = gst_map[gstin][narrative]
+        # Check CD_test first
+        if gstin in cd_map and narrative in cd_map[gstin]:
 
-                ws.cell(row=r, column=col_map["drcr"]).value = "DR"
-                ws.cell(row=r, column=col_map["amount"]).value = float(amount)
+            amount = cd_map[gstin][narrative]
+            drcr_value = "DR"
+
+        # Fallback to ISD distribution
+        elif gstin in isd_map and narrative in isd_map[gstin]:
+
+            amount = isd_map[gstin][narrative]
+            drcr_value = "CR"
+
+        if amount is not None:
+
+            ws.cell(row=r, column=col_map["drcr"]).value = drcr_value
+            ws.cell(row=r, column=col_map["amount"]).value = float(amount)
 
     wb.save(output_template)
 
     print("Pipeline completed successfully!")
 
 
-# -----------------------------
+# --------------------------------------------------
 # RUN SCRIPT
-# -----------------------------
+# --------------------------------------------------
 if __name__ == "__main__":
 
     input_file = "Sid.xlsm"
