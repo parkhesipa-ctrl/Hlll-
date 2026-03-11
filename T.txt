@@ -1,19 +1,18 @@
 import pandas as pd
 from openpyxl import load_workbook
-import os
 
 
 def process_pipeline(input_file, template_file, output_excel, output_template):
 
-    # -----------------------------
-    # READ CD_test
-    # -----------------------------
+    # --------------------------------------------------
+    # PART 1: READ CD_test SHEET
+    # --------------------------------------------------
     df = pd.read_excel(input_file, sheet_name="CD_test", engine="openpyxl")
     df.columns = df.columns.str.strip()
 
-    # -----------------------------
-    # PART 1: CREATE IGST SGST CGST
-    # -----------------------------
+    # --------------------------------------------------
+    # PART 2: CALCULATE IGST SGST CGST
+    # --------------------------------------------------
     igst_cols = [c for c in df.columns if c.lower().endswith("as igst")]
     sgst_cols = [c for c in df.columns if c.lower().endswith("as sgst")]
     cgst_cols = [c for c in df.columns if c.lower().endswith("as cgst")]
@@ -25,9 +24,9 @@ def process_pipeline(input_file, template_file, output_excel, output_template):
     df["SGST"] = (df[sgst_cols].sum(axis=1) / 2).round(2)
     df["CGST"] = (df[cgst_cols].sum(axis=1) / 2).round(2)
 
-    # -----------------------------
-    # PART 2: ISD DISTRIBUTION
-    # -----------------------------
+    # --------------------------------------------------
+    # PART 3: CREATE ISD DISTRIBUTION SHEET
+    # --------------------------------------------------
     cgst_start = [c for c in df.columns if c.lower().startswith("cgst as")]
     sgst_start = [c for c in df.columns if c.lower().startswith("sgst as")]
     igst_start = [c for c in df.columns if c.lower().startswith("igst as")]
@@ -36,62 +35,88 @@ def process_pipeline(input_file, template_file, output_excel, output_template):
     df["SGST_TOTAL"] = df[sgst_start].sum(axis=1) / 2
     df["IGST_TOTAL"] = df[igst_start].sum(axis=1) / 2
 
-    grouped = df.groupby("isdgstin")[["CGST_TOTAL","SGST_TOTAL","IGST_TOTAL"]].sum().reset_index()
+    grouped = df.groupby("isdgstin")[["CGST_TOTAL", "SGST_TOTAL", "IGST_TOTAL"]].sum().reset_index()
 
     records = []
 
     for _, row in grouped.iterrows():
-
         gstin = row["isdgstin"]
 
         if row["CGST_TOTAL"] != 0:
-            records.append([gstin,"CGST",round(row["CGST_TOTAL"],2)])
+            records.append([gstin, "CGST", round(row["CGST_TOTAL"], 2)])
 
         if row["SGST_TOTAL"] != 0:
-            records.append([gstin,"SGST",round(row["SGST_TOTAL"],2)])
+            records.append([gstin, "SGST", round(row["SGST_TOTAL"], 2)])
 
         if row["IGST_TOTAL"] != 0:
-            records.append([gstin,"IGST",round(row["IGST_TOTAL"],2)])
+            records.append([gstin, "IGST", round(row["IGST_TOTAL"], 2)])
 
-    isd_df = pd.DataFrame(records, columns=["gstin","narrative","amount"])
+    isd_df = pd.DataFrame(records, columns=["gstin", "narrative", "amount"])
 
-    df.drop(columns=["CGST_TOTAL","SGST_TOTAL","IGST_TOTAL"], inplace=True)
+    df.drop(columns=["CGST_TOTAL", "SGST_TOTAL", "IGST_TOTAL"], inplace=True)
 
-    # -----------------------------
-    # SAVE EXCEL WITH BOTH SHEETS
-    # -----------------------------
+    # --------------------------------------------------
+    # PART 4: SAVE PROCESSED EXCEL
+    # --------------------------------------------------
     with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="CD_test", index=False)
         isd_df.to_excel(writer, sheet_name="isd distribution", index=False)
 
-    # -----------------------------
-    # PART 3: POPULATE TEMPLATE
-    # -----------------------------
-    template_records = []
+    # --------------------------------------------------
+    # PART 5: BUILD GSTIN → TAX MAP
+    # --------------------------------------------------
+    gst_map = {}
 
     for _, row in df.iterrows():
 
-        gstin = row["Recipientgstin"]
+        gstin = str(row["Recipientgstin"]).strip()
 
-        template_records.append([gstin,"CGST",row["CGST"],"DR"])
-        template_records.append([gstin,"SGST",row["SGST"],"DR"])
-        template_records.append([gstin,"IGST",row["IGST"],"DR"])
+        gst_map[gstin] = {
+            "CGST": row["CGST"],
+            "SGST": row["SGST"],
+            "IGST": row["IGST"]
+        }
 
-    template_df = pd.DataFrame(template_records,
-                               columns=["gstin","narrative","amount","cr dr"])
-
+    # --------------------------------------------------
+    # PART 6: UPDATE TEMPLATE (ONLY DR/CR & AMOUNT)
+    # --------------------------------------------------
     wb = load_workbook(template_file)
     ws = wb.active
 
-    start_row = 3
+    for r in range(3, ws.max_row + 1):
 
-    for i, row in template_df.iterrows():
+        gstin = str(ws.cell(row=r, column=28).value).strip()   # AB column
+        narrative = str(ws.cell(row=r, column=27).value).strip()  # AA column
 
-        ws.cell(row=start_row+i, column=1).value = row["cr dr"]
-        ws.cell(row=start_row+i, column=2).value = row["amount"]
-        ws.cell(row=start_row+i, column=3).value = row["gstin"]
-        ws.cell(row=start_row+i, column=4).value = row["narrative"]
+        if gstin in gst_map and narrative in gst_map[gstin]:
+
+            amount = gst_map[gstin][narrative]
+
+            # update DR/CR
+            ws.cell(row=r, column=1).value = "DR"
+
+            # update Transaction Amount
+            ws.cell(row=r, column=8).value = float(amount)
 
     wb.save(output_template)
 
     print("Pipeline completed successfully!")
+
+
+# --------------------------------------------------
+# FUNCTION CALL
+# --------------------------------------------------
+if __name__ == "__main__":
+
+    input_file = "Sid.xlsm"           # your source file
+    template_file = "template.xlsx"   # template file
+
+    output_excel = "processed.xlsx"
+    output_template = "filled_template.xlsx"
+
+    process_pipeline(
+        input_file,
+        template_file,
+        output_excel,
+        output_template
+    )
