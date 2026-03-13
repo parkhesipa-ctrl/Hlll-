@@ -1,15 +1,3 @@
-# --------------------------------------------------
-# REMOVE ROWS WITH EMPTY AMOUNT
-# --------------------------------------------------
-rows_to_delete = []
-
-for r in range(header_row + 1, ws.max_row + 1):
-
-    amount_value = ws.cell(row=r, column=col_map["amount"]).value
-
-    if amount_value is None or amount_value == 0:
-        rows_to_delete.append(r)
-
-# delete rows in reverse order (important)
-for r in reversed(rows_to_delete):
-    ws.delete_rows(r)
+&& apt-get purge -y python3-pip python3-pip-whl \
+&& apt-get autoremove -y \
+&& rm -rf /usr/lib/python3/dist-packages/pip*
