@@ -1,2 +1,39 @@
-python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+Create a multi-agent workflow for processing customer emails uploaded as PDF files.
+
+Workflow requirements:
+
+1. Start with a file upload where the user uploads a PDF containing a customer email.
+
+2. Extract the email content from the uploaded PDF document.
+
+3. Analyze the extracted email and perform the following tasks:
+   - Summarize the email
+   - Identify the issue type
+   - Determine which internal team should handle the request (examples: Payments Team, Technical Support Team, Account Team, Fraud Team)
+   - Provide the reason why the email should be routed to that team.
+
+4. Generate a unique Case ID for the request.
+
+5. Create a professional holding reply email to the customer which includes:
+   - acknowledgement of the request
+   - the generated Case ID
+   - message that the issue is being reviewed.
+
+6. Create an internal forwarding email to the identified team which includes:
+   - Case ID
+   - summary of the customer email
+   - the full original email content
+   - reason for assigning to that team.
+
+7. Combine all results and return the following structured output:
+   - Case ID
+   - Email summary
+   - Identified team
+   - Routing reason
+   - Draft holding reply
+   - Draft forwarding email
+
+8. The workflow should end by returning all the generated data so it can be displayed in a frontend case dashboard.
+
+Required nodes in the workflow:
+Start → PDF Input → Extract Email Text → Email Analysis Agent → Generate Case ID → Draft Holding Reply → Draft Forwarding Email → Return Case Data.
